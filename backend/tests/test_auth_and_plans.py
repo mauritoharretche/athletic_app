@@ -256,6 +256,15 @@ def test_coach_dashboard_metrics(client: TestClient):
     assert beto_metrics["completed_sessions_week"] == 1
     assert beto_metrics["compliance_rate"] is None
 
+    overview_resp = client.get("/dashboard/coach/overview", headers=auth_header(coach_token))
+    assert overview_resp.status_code == 200, overview_resp.text
+    overview = overview_resp.json()
+    assert overview["total_athletes"] == 2
+    assert overview["pending_sessions_today"] == 0
+    assert overview["low_compliance_athletes"] == 1
+    assert len(overview["top_athletes"]) >= 1
+    assert len(overview["trend"]) == 4
+
 
 def test_athlete_updates_and_deletes_session(client: TestClient):
     athlete = register_user(client, "Updater", "update@example.com", "ATHLETE")
