@@ -1,17 +1,19 @@
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..core.enums import UserRole
 from ..database import get_db
-from ..dependencies import require_role
+from ..dependencies import ensure_athlete_access, require_role
 from ..models.plan import TrainingPlan, TrainingSessionPlanned
 from ..models.session import TrainingSessionDone
 from ..models.user import CoachAthlete, User
 from ..schemas.dashboard import (
+    AthleteDetailMetrics,
     AthleteMetrics,
+    AthleteRecentSession,
     CoachAthleteHighlight,
     CoachOverview,
     CoachTrendPoint,
