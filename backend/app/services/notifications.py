@@ -3,7 +3,8 @@ import smtplib
 from email.message import EmailMessage
 
 from ..core.config import get_settings
-from ..models.user import CoachInvite
+from ..models.user import CoachInvite, User
+from ..schemas.dashboard import AthleteAlert, CoachAlert
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,33 @@ def send_invite_accepted(invite: CoachInvite) -> None:
         f"Ya puedes asignarle planes y comenzar a registrar su progreso."
     )
     _send_email(recipient=invite.coach.email, subject=subject, body=body)
+
+
+def send_coach_alerts_email(coach: User, alerts: list[CoachAlert]) -> None:
+    if not coach.email or not alerts:
+        return
+    subject = "Alertas de tus atletas"
+    body = "Resumen de alertas activas:\n\n"
+    for alert in alerts:
+        body += f"- {alert.athlete_name}: {alert.message}\n"
+    cta = _build_cta_url("/coach")
+    if cta:
+        body += f"\nAdministra a tus atletas aquí: {cta}\n"
+    _send_email(recipient=coach.email, subject=subject, body=body)
+
+
+def send_athlete_alerts_email(athlete: User, alerts: list[AthleteAlert]) -> None:
+    if not athlete.email or not alerts:
+        return
+    subject = "Recordatorio de entrenamiento"
+    body = f"Hola {athlete.name},\n\n"
+    body += "Esto es lo que tienes pendiente:\n"
+    for alert in alerts:
+        body += f"- {alert.message}\n"
+    cta = _build_cta_url("/athlete")
+    if cta:
+        body += f"\nRevisa tu agenda aquí: {cta}\n"
+    _send_email(recipient=athlete.email, subject=subject, body=body)
 
 
 def _build_cta_url(path: str) -> str | None:

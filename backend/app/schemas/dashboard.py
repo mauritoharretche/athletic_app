@@ -59,3 +59,21 @@ class AthleteDetailMetrics(BaseModel):
     upcoming_sessions: int
     weekly_trend: list[CoachTrendPoint]
     recent_sessions: list[AthleteRecentSession]
+    pending_sessions_today: int
+
+
+class CoachAlert(BaseModel):
+    athlete_id: int
+    athlete_name: str
+    message: str
+    severity: str = "warning"
+
+
+class AthleteAlert(BaseModel):
+    message: str
+    severity: str = "info"
+
+
+class AlertDispatchResult(BaseModel):
+    queued_alerts: int
+    detail: str
