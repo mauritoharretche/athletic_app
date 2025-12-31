@@ -20,6 +20,6 @@
     "typescript": "^5.4.2",
     "eslint": "8.56.0",
     "eslint-config-next": "14.1.0"
-  }
+  },
+  "packageManager": "npm@10.9.0"
 }
-  "packageManager": "npm@10.9.0",
