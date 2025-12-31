@@ -24,6 +24,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    env_file:
+      - backend/.env
     environment:
       DATABASE_URL: postgresql+psycopg://athletics:athletics@db:5432/athletics
       JWT_SECRET_KEY: change_me

@@ -1,6 +1,6 @@
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -13,11 +13,15 @@ from ..models.user import CoachAthlete, User
 from ..schemas.dashboard import (
     AthleteDetailMetrics,
     AthleteMetrics,
+    AthleteAlert,
     AthleteRecentSession,
     CoachAthleteHighlight,
     CoachOverview,
+    CoachAlert,
     CoachTrendPoint,
+    AlertDispatchResult,
 )
+from ..services.notifications import send_athlete_alerts_email, send_coach_alerts_email
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -83,6 +87,141 @@ def coach_overview(
         low_compliance_athletes=low_compliance,
         trend=trend,
         top_athletes=top_athletes,
+    )
+
+
+@router.get("/coach/alerts", response_model=list[CoachAlert])
+def coach_alerts(
+    current_user: User = Depends(require_role(UserRole.COACH)),
+    db: Session = Depends(get_db),
+) -> list[CoachAlert]:
+    return _build_coach_alerts(db, current_user.id)
+
+
+@router.post("/coach/alerts/send", response_model=AlertDispatchResult)
+def trigger_coach_alert_notifications(
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(require_role(UserRole.COACH)),
+    db: Session = Depends(get_db),
+) -> AlertDispatchResult:
+    alerts = _build_coach_alerts(db, current_user.id)
+    if not alerts:
+        return AlertDispatchResult(queued_alerts=0, detail="No alerts to send.")
+    background_tasks.add_task(send_coach_alerts_email, current_user, alerts)
+    return AlertDispatchResult(
+        queued_alerts=len(alerts),
+        detail="Alert emails queued for delivery.",
+    )
+
+
+@router.get("/coach/athlete/{athlete_id}", response_model=AthleteDetailMetrics)
+def coach_athlete_detail(
+    athlete_id: int,
+    current_user: User = Depends(require_role(UserRole.COACH)),
+    db: Session = Depends(get_db),
+) -> AthleteDetailMetrics:
+    ensure_athlete_access(athlete_id, current_user=current_user, db=db)
+    athlete = db.get(User, athlete_id)
+    if not athlete:
+        raise HTTPException(status_code=404, detail="Athlete not found.")
+    today = date.today()
+    week_start = today - timedelta(days=6)
+    planned_week = (
+        db.query(func.count(TrainingSessionPlanned.id))
+        .join(TrainingPlan, TrainingPlan.id == TrainingSessionPlanned.plan_id)
+        .filter(
+            TrainingPlan.athlete_id == athlete_id,
+            TrainingSessionPlanned.date >= week_start,
+            TrainingSessionPlanned.date <= today,
+        )
+        .scalar()
+        or 0
+    )
+    completed_row = (
+        db.query(
+            func.count(TrainingSessionDone.id),
+            func.coalesce(func.sum(TrainingSessionDone.actual_distance), 0),
+        )
+        .filter(
+            TrainingSessionDone.athlete_id == athlete_id,
+            TrainingSessionDone.date >= week_start,
+            TrainingSessionDone.date <= today,
+        )
+        .one()
+    )
+    completed_week = completed_row[0] or 0
+    total_distance = float(completed_row[1] or 0)
+    compliance = (
+        round(completed_week / planned_week, 2) if planned_week > 0 else None
+    )
+    upcoming_sessions = (
+        db.query(func.count(TrainingSessionPlanned.id))
+        .join(TrainingPlan, TrainingPlan.id == TrainingSessionPlanned.plan_id)
+        .filter(
+            TrainingPlan.athlete_id == athlete_id,
+            TrainingSessionPlanned.date >= today,
+            TrainingSessionPlanned.date <= today + timedelta(days=7),
+        )
+        .scalar()
+        or 0
+    )
+    weekly_trend = _build_weekly_trend(db, [athlete_id])
+    streak = _calculate_completion_streak(db, athlete_id)
+    recent_sessions = (
+        db.query(TrainingSessionDone)
+        .filter(TrainingSessionDone.athlete_id == athlete_id)
+        .order_by(TrainingSessionDone.date.desc())
+        .limit(5)
+        .all()
+    )
+    return AthleteDetailMetrics(
+        athlete_id=athlete_id,
+        athlete_name=athlete.name,
+        planned_sessions_week=int(planned_week),
+        completed_sessions_week=int(completed_week),
+        completed_distance_week=total_distance,
+        compliance_rate=compliance,
+        current_streak=streak,
+        upcoming_sessions=int(upcoming_sessions),
+        weekly_trend=weekly_trend,
+        pending_sessions_today=_pending_sessions_today(db, athlete_id),
+        recent_sessions=[
+            AthleteRecentSession(
+                id=session.id,
+                date=session.date.isoformat(),
+                title=session.notes or session.surface,
+                actual_distance=session.actual_distance,
+                actual_duration=session.actual_duration,
+                actual_rpe=session.actual_rpe,
+            )
+            for session in recent_sessions
+        ],
+    )
+
+
+@router.get("/athlete/alerts", response_model=list[AthleteAlert])
+def athlete_alerts(
+    current_user: User = Depends(require_role(UserRole.ATHLETE)),
+    db: Session = Depends(get_db),
+) -> list[AthleteAlert]:
+    detail = coach_athlete_detail(athlete_id=current_user.id, current_user=current_user, db=db)
+    return _build_athlete_alerts_from_detail(detail)
+
+
+@router.post("/athlete/alerts/send", response_model=AlertDispatchResult)
+def trigger_athlete_alert_notifications(
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(require_role(UserRole.ATHLETE)),
+    db: Session = Depends(get_db),
+) -> AlertDispatchResult:
+    detail = coach_athlete_detail(athlete_id=current_user.id, current_user=current_user, db=db)
+    alerts = _build_athlete_alerts_from_detail(detail)
+    if not alerts:
+        return AlertDispatchResult(queued_alerts=0, detail="No alerts to send.")
+    background_tasks.add_task(send_athlete_alerts_email, current_user, alerts)
+    return AlertDispatchResult(
+        queued_alerts=len(alerts),
+        detail="Alert email queued. Check your inbox shortly.",
     )
 
 
@@ -244,3 +383,102 @@ def _build_weekly_trend(
             )
         )
     return points
+
+
+def _calculate_completion_streak(db: Session, athlete_id: int, days: int = 21) -> int:
+    today = date.today()
+    start = today - timedelta(days=days)
+    completed_dates = {
+        row[0]
+        for row in (
+            db.query(TrainingSessionDone.date)
+            .filter(
+                TrainingSessionDone.athlete_id == athlete_id,
+                TrainingSessionDone.date >= start,
+                TrainingSessionDone.date <= today,
+            )
+            .distinct()
+            .all()
+        )
+    }
+    streak = 0
+    cursor = today
+    while cursor in completed_dates:
+        streak += 1
+        cursor -= timedelta(days=1)
+    return streak
+
+
+def _pending_sessions_today(db: Session, athlete_id: int) -> int:
+    today = date.today()
+    planned = (
+        db.query(func.count(TrainingSessionPlanned.id))
+        .join(TrainingPlan, TrainingPlan.id == TrainingSessionPlanned.plan_id)
+        .filter(
+            TrainingPlan.athlete_id == athlete_id,
+            TrainingSessionPlanned.date == today,
+        )
+        .scalar()
+        or 0
+    )
+    completed = (
+        db.query(func.count(TrainingSessionDone.id))
+        .filter(
+            TrainingSessionDone.athlete_id == athlete_id,
+            TrainingSessionDone.date == today,
+        )
+        .scalar()
+        or 0
+    )
+    return max(0, int(planned) - int(completed))
+
+
+def _build_coach_alerts(db: Session, coach_id: int) -> list[CoachAlert]:
+    metrics, _ = _build_coach_metrics(db, coach_id)
+    alerts: list[CoachAlert] = []
+    for metric in metrics:
+        if metric.pending_sessions_today > 0:
+            alerts.append(
+                CoachAlert(
+                    athlete_id=metric.athlete_id,
+                    athlete_name=metric.athlete_name,
+                    message=f"{metric.pending_sessions_today} sesión(es) pendientes hoy.",
+                    severity="info",
+                )
+            )
+        if metric.compliance_rate is not None and metric.compliance_rate < 0.6:
+            alerts.append(
+                CoachAlert(
+                    athlete_id=metric.athlete_id,
+                    athlete_name=metric.athlete_name,
+                    message="Cumplimiento semanal por debajo del 60%.",
+                    severity="warning",
+                )
+            )
+    return alerts
+
+
+def _build_athlete_alerts_from_detail(detail: AthleteDetailMetrics) -> list[AthleteAlert]:
+    alerts: list[AthleteAlert] = []
+    if detail.pending_sessions_today > 0:
+        alerts.append(
+            AthleteAlert(
+                message=f"Tienes {detail.pending_sessions_today} sesión(es) pendientes hoy.",
+                severity="warning",
+            )
+        )
+    if detail.current_streak == 0:
+        alerts.append(
+            AthleteAlert(
+                message="Tu racha está en 0 días. Registra una sesión para reiniciarla.",
+                severity="info",
+            )
+        )
+    if detail.upcoming_sessions == 0:
+        alerts.append(
+            AthleteAlert(
+                message="No hay sesiones planificadas para la próxima semana. Contacta a tu coach.",
+                severity="info",
+            )
+        )
+    return alerts

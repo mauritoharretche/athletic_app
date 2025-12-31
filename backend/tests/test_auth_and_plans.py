@@ -265,6 +265,41 @@ def test_coach_dashboard_metrics(client: TestClient):
     assert len(overview["top_athletes"]) >= 1
     assert len(overview["trend"]) == 4
 
+    alerts_resp = client.get("/dashboard/coach/alerts", headers=auth_header(coach_token))
+    assert alerts_resp.status_code == 200, alerts_resp.text
+    alerts = alerts_resp.json()
+    assert any(alert["athlete_id"] == athlete_one["id"] for alert in alerts)
+    send_alerts_resp = client.post(
+        "/dashboard/coach/alerts/send",
+        headers=auth_header(coach_token),
+    )
+    assert send_alerts_resp.status_code == 200
+    assert send_alerts_resp.json()["queued_alerts"] == len(alerts)
+
+    detail_resp = client.get(
+        f"/dashboard/coach/athlete/{athlete_one['id']}", headers=auth_header(coach_token)
+    )
+    assert detail_resp.status_code == 200, detail_resp.text
+    detail = detail_resp.json()
+    assert detail["athlete_id"] == athlete_one["id"]
+    assert detail["planned_sessions_week"] == 2
+    assert detail["completed_sessions_week"] == 1
+    assert detail["pending_sessions_today"] == 0
+    assert len(detail["weekly_trend"]) == 4
+    assert detail["current_streak"] >= 1
+    assert len(detail["recent_sessions"]) >= 1
+
+    athlete_alerts = client.get("/dashboard/athlete/alerts", headers=auth_header(token_one))
+    assert athlete_alerts.status_code == 200
+    athlete_alert_list = athlete_alerts.json()
+    assert isinstance(athlete_alert_list, list)
+    athlete_alert_send = client.post(
+        "/dashboard/athlete/alerts/send",
+        headers=auth_header(token_one),
+    )
+    assert athlete_alert_send.status_code == 200
+    assert athlete_alert_send.json()["queued_alerts"] == len(athlete_alert_list)
+
 
 def test_athlete_updates_and_deletes_session(client: TestClient):
     athlete = register_user(client, "Updater", "update@example.com", "ATHLETE")

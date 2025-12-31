@@ -1,9 +1,7 @@
-from datetime import date, datetime
-from typing import Optional
-
+from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, EmailStr, Field, computed_field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field
 
 from ..core.enums import InviteStatus, UserRole
 
@@ -32,7 +30,7 @@ class UserRead(UserBase):
     id: int
     created_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(from_attributes=True)
 
 
 class UserSummary(BaseModel):
@@ -40,7 +38,7 @@ class UserSummary(BaseModel):
     name: str
     email: EmailStr
 
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AthleteProfileBase(BaseModel):
@@ -56,7 +54,7 @@ class AthleteProfileUpdate(AthleteProfileBase):
 class AthleteProfileRead(AthleteProfileBase):
     user_id: int
 
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AthleteSummary(BaseModel):
@@ -80,7 +78,7 @@ class CoachInviteRead(BaseModel):
     created_at: datetime
     responded_at: Optional[datetime] = None
 
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(from_attributes=True)
 
     @computed_field(return_type=bool)  # type: ignore[misc]
     def requires_signup(self) -> bool:
