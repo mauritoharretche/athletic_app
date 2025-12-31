@@ -1,2 +1,7 @@
 mobile-old/
 .venv/
+node_modules/
+**/node_modules/
+**/.next/
+web/landing/.vercel/
+web/landing/out/
