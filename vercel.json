@@ -1,0 +1,18 @@
+{
+  "builds": [
+    {
+      "src": "web/landing/package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "web/landing/out"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/$1",
+      "status": 200
+    }
+  ]
+}
